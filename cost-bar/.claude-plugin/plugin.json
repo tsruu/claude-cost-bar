@@ -1,0 +1,11 @@
+{
+  "name": "cost-bar",
+  "version": "0.1.0",
+  "description": "/spend toggles a band above the prompt with live API-equivalent spend per model, cache state, context and a next-prompt estimate.",
+  "types": "./types/index.d.ts",
+  "license": "MIT",
+  "author": {
+    "name": "tsruu"
+  },
+  "repository": "https://github.com/tsruu/claude-cost-bar"
+}

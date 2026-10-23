@@ -1,0 +1,13 @@
+{
+  "name": "trishan-mods",
+  "owner": {
+    "name": "tsruu"
+  },
+  "plugins": [
+    {
+      "name": "cost-bar",
+      "source": "./cost-bar",
+      "description": "/spend toggles a band above the prompt with live API-equivalent spend, cache state and a next-prompt estimate."
+    }
+  ]
+}
