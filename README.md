@@ -2,14 +2,16 @@
 
 A [Claude Code mod](https://claude.com/blog/claude-code-mods) that adds a live **spend and context band above the prompt**. Type `/spend` to show it, click ✕ to hide it. It is built for people who switch between models (Claude and GPT through an Azure/OpenAI-compatible proxy) and want to see what each prompt will really cost, including the cache.
 
-![The /spend band: session spend, per-model costs, context bar and next-prompt estimate](docs/band.png)
+![The /spend band across three models (Opus 5.5, GPT-6 Sol, Sonnet 5.5): session spend, per-model costs, context bar and next-prompt estimate](docs/band.png)
+
+*The spend, per-model costs and context bar are measured. The next-prompt line is only a guess: here it says "warm" right after a switch, and the real request turned out to re-write most of the cache. See [below](#what-switching-models-does-to-the-cache).*
 
 ## What it shows
 
 - **Spend:** session total, spend in the last 10 minutes, and cache-hit %.
 - **Per model:** one row per model with its cost and share of the total, so mid-session model switches add up correctly.
 - **Context:** a rounded, full-width bar split into messages, MCP tools, system tools, system prompt and other, coloured like `/usage`, with token counts.
-- **Next prompt:** an estimate of what your next prompt will cost, and whether the cache is **warm** (with time left) or **cold** (and how much would be re-cached).
+- **Next prompt:** a *guess* at what your next prompt will cost, and whether the cache looks **warm** (with time left) or **cold**. It is based on timers and on what the author observed, and a model switch can lose a cache the timer says is still good (see below).
 
 Each turn is priced from the API's own token counts: uncached input, output, cache reads and cache writes, each at the rate of the model that answered. Subagent turns are counted too.
 
@@ -43,24 +45,26 @@ A model that isn't in the built-in table and has no custom price is counted as $
 
 ## What switching models does to the cache
 
-Each model keeps its own prompt cache, and a cache expires after its lifetime. So a model's **first** request after you switch to it is cold: the whole conversation is written to its cache at its cache-write price. What happens to the cache you *left* depends on where you went.
+Each model keeps its own prompt cache, and a cache expires after its lifetime (1 hour in the author's account; the plugin settings let you change it). So the **first** request after you switch to a model is cold: the whole conversation is written to its cache at its cache-write price, which is the expensive part of a switch.
 
-These are observations from the author's own saved sessions (a small sample, not a guarantee), and the band's next-prompt estimate is built on them:
+What happens to the cache you *left* is less clear. These are observations from the author's own saved sessions, a small sample. They don't add up to a rule, so the band's next-prompt number is a guess:
 
-| Switch | What was observed |
+| Situation | What was observed |
 |---|---|
-| **Claude → GPT** | The GPT model starts cold. The Claude cache is untouched: after returning, the Claude model read about as much from cache as before (274k before and 274k after in one session, 72k and 75k in another). |
-| **GPT → Claude** | Free if the Claude cache is still within its lifetime and no *other* Claude model answered in between. If it had expired, the whole conversation was re-written. |
-| **Claude → Claude** | The new model starts cold, and the model you left **loses most of its cache**. A Sonnet → Opus → Sonnet round trip went from 292k tokens read to 52k read, and re-wrote about 248k (roughly $1 on Sonnet). Opus → Sonnet → Opus looked the same. The likely cause is that thinking blocks written by one Claude model can't be read by another, but that is not proven. |
-| **GPT → GPT** | The new model starts cold (three conversations: 127k, 115k and 45k tokens written on the first request), then warms up. Whether the first GPT model's cache survives the detour was **not tested**; the band assumes it does. |
+| Claude → GPT → back to the same Claude model (one simple prompt on the GPT model) | The Claude cache survived. Two sessions: 274k tokens read before and after, and 72k before and 75k after. |
+| Opus → Sonnet → Opus (short chat; the Sonnet turn did no thinking) | The Opus cache survived: 77k tokens read, 1.6k written. |
+| Sonnet → Opus → Sonnet (long chat; Opus had thinking turns) | The Sonnet cache was mostly lost: 292k read before, 52k after, about 248k re-written (roughly $1 on Sonnet). |
+| Opus → GPT-6 Sol and GPT-6.1 Sol (several turns, including tool and skill calls) → back to Opus | The Opus cache was lost: only 52k read and 76k re-written, in a request that had grown from 79k to 128k tokens. The saved request shows the first message of the conversation changed, so everything after it missed the cache. Why it changed is not known. |
+| GPT → GPT | The new model starts cold (three conversations: 127k, 115k and 45k tokens written on the first request), then warms up. Whether the first GPT model's cache survives the detour was not tested. |
 
-What this means in practice:
+Possible causes for the lost caches, none proven: thinking blocks that one model can't read from another, and tool or skill activity during the detour changing early messages. A plain time-out was ruled out in the last two cases above, since the 1-hour lifetime had not passed.
 
-- A detour through a GPT model is the cheap way to get a second opinion: it leaves your Claude cache alone. A second *Claude* model does not.
-- The cost of a switch is the whole context times the target's cache-write price, so switch early or after compacting.
-- Over an hour away (or five minutes, on a 5-minute cache), everything is cold again.
+Other things worth knowing:
 
-The next-prompt estimate also adds an average output size and number of tool steps from your last few turns on the same model. It does not include the length of the prompt you are about to type.
+- GPT models count tokens differently. For the same conversation one GPT model reported about 50k tokens where Claude counted 79k. The band's context figure comes from the last reply, so right after a GPT turn it shows the GPT count, not what Claude will see.
+- The band currently assumes that a turn from a *different Claude model* breaks the cache you left, and that a GPT detour doesn't. The observations above show both assumptions can be wrong, which is why the next-prompt number is a guess.
+- The cost of a cold switch is the whole context times the target model's cache-write price, so switching early, or after compacting, costs least. Sticking to one model per conversation is the safest.
+- After more than the cache lifetime away, everything is cold again.
 
 ## Prices and assumptions
 
@@ -74,6 +78,7 @@ All figures are **API-equivalent estimates, not a bill**.
 
 ## Limits
 
+- The next-prompt estimate can be badly wrong after a model switch (see above). Spend, per-model costs and the context breakdown are measured from the API's own token counts.
 - Totals are per session and reset when the session id changes (for example after a rewind or restart).
 - Typing `/spend` leaves the command line in the chat. A mod can hide its output but not the typed command.
 - Tested on Claude Code 2.1.308 (desktop app). Mods are new; the API may change.
