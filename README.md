@@ -41,14 +41,26 @@ Optional fields for a custom price: `longAt` (token count where a higher tier st
 
 A model that isn't in the built-in table and has no custom price is counted as $0, and the band says so.
 
-## How the cache estimate works
+## What switching models does to the cache
 
-Caches are per model, and a cache expires after its time-to-live. The estimate follows what I measured in real saved sessions:
+Each model keeps its own prompt cache, and a cache expires after its lifetime. So a model's **first** request after you switch to it is cold: the whole conversation is written to its cache at its cache-write price. What happens to the cache you *left* depends on where you went.
 
-- Switching to a model that has not answered yet starts **cold**: the whole context is written at that model's cache-write price.
-- A detour through a **GPT** model leaves a Claude cache intact.
-- A turn from a **different Claude** model breaks the Claude cache you left: only the system prompt, tools and MCP prefix are read back, and the rest is re-written. A Sonnet → Opus → Sonnet round trip re-cached ~250k tokens in my logs.
-- The estimate adds an average output size and number of tool steps from your last few turns on the same model. It does not include the length of the prompt you are about to type.
+These are observations from the author's own saved sessions (a small sample, not a guarantee), and the band's next-prompt estimate is built on them:
+
+| Switch | What was observed |
+|---|---|
+| **Claude → GPT** | The GPT model starts cold. The Claude cache is untouched: after returning, the Claude model read about as much from cache as before (274k before and 274k after in one session, 72k and 75k in another). |
+| **GPT → Claude** | Free if the Claude cache is still within its lifetime and no *other* Claude model answered in between. If it had expired, the whole conversation was re-written. |
+| **Claude → Claude** | The new model starts cold, and the model you left **loses most of its cache**. A Sonnet → Opus → Sonnet round trip went from 292k tokens read to 52k read, and re-wrote about 248k (roughly $1 on Sonnet). Opus → Sonnet → Opus looked the same. The likely cause is that thinking blocks written by one Claude model can't be read by another, but that is not proven. |
+| **GPT → GPT** | The new model starts cold (three conversations: 127k, 115k and 45k tokens written on the first request), then warms up. Whether the first GPT model's cache survives the detour was **not tested**; the band assumes it does. |
+
+What this means in practice:
+
+- A detour through a GPT model is the cheap way to get a second opinion: it leaves your Claude cache alone. A second *Claude* model does not.
+- The cost of a switch is the whole context times the target's cache-write price, so switch early or after compacting.
+- Over an hour away (or five minutes, on a 5-minute cache), everything is cold again.
+
+The next-prompt estimate also adds an average output size and number of tool steps from your last few turns on the same model. It does not include the length of the prompt you are about to type.
 
 ## Prices and assumptions
 
