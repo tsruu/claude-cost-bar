@@ -1,11 +1,41 @@
 {
   "name": "cost-bar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "/spend toggles a band above the prompt with live API-equivalent spend per model, cache state, context and a next-prompt estimate.",
   "types": "./types/index.d.ts",
   "license": "MIT",
   "author": {
     "name": "tsruu"
   },
-  "repository": "https://github.com/tsruu/claude-cost-bar"
+  "repository": "https://github.com/tsruu/claude-cost-bar",
+  "userConfig": {
+    "claudeCache": {
+      "type": "string",
+      "title": "Claude cache lifetime",
+      "description": "1h on a Claude subscription, usually 5m on an API key (unless ENABLE_PROMPT_CACHING_1H is set). Sets the warm/cold timer and the cache-write price.",
+      "default": "1h",
+      "options": [
+        "1h",
+        "5m"
+      ]
+    },
+    "gptCacheHours": {
+      "type": "number",
+      "title": "GPT cache lifetime (hours)",
+      "description": "How long an idle GPT cache is treated as warm. Azure's newer models document 24 hours.",
+      "default": 24
+    },
+    "windowMinutes": {
+      "type": "number",
+      "title": "Recent-spend window (minutes)",
+      "description": "The 'last N minutes' figure on the band.",
+      "default": 10
+    },
+    "customPrices": {
+      "type": "string",
+      "title": "Custom prices (JSON)",
+      "description": "Override or add models, USD per 1M tokens. Example: {\"gpt-6-sol\":{\"input\":2,\"output\":10,\"read\":0.2,\"write\":2.5}}",
+      "default": ""
+    }
+  }
 }

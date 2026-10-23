@@ -22,9 +22,24 @@ In Claude Code (CLI or desktop app):
 /plugin install cost-bar@trishan-mods
 ```
 
-Then start a new session and type `/spend`. Plugins load when a session starts, so already-open chats need a restart.
+Start a new session and type `/spend`. That's it: the defaults work for most people. (Plugins load when a session starts, so chats that were already open need a restart.)
 
 On a remote host (SSH sessions run Claude Code on that machine), install it there too.
+
+## Settings
+
+Open `/plugin`, pick **cost-bar** and change the settings. No file editing needed.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Claude cache lifetime | `1h` | `1h` or `5m`. This sets the warm/cold timer and the cache-write price. Claude Code reportedly uses 1h on a Claude subscription and 5m on an API key (unless `ENABLE_PROMPT_CACHING_1H` is set). If the "cold" warnings look wrong, try the other value. |
+| GPT cache lifetime (hours) | `24` | How long an idle GPT cache counts as warm. Azure documents 24h for newer models; OpenAI's in-memory cache is minutes. |
+| Recent-spend window (minutes) | `10` | The "last N minutes" figure. |
+| Custom prices (JSON) | empty | Override or add a model, USD per 1M tokens. Matched by part of the model id. Example: `{"gpt-6-sol":{"input":2,"output":10,"read":0.2,"write":2.5}}` |
+
+Optional fields for a custom price: `longAt` (token count where a higher tier starts) and `long` (that tier's `input`, `output`, `read`, `write`).
+
+A model that isn't in the built-in table and has no custom price is counted as $0, and the band says so.
 
 ## How the cache estimate works
 
@@ -37,14 +52,13 @@ Caches are per model, and a cache expires after its time-to-live. The estimate f
 
 ## Prices and assumptions
 
-All figures are **API-equivalent estimates, not a bill**. Prices live in one table at the top of [`cost-bar/hooks/register.tsx`](cost-bar/hooks/register.tsx); edit it to match your plan.
+All figures are **API-equivalent estimates, not a bill**.
 
-- Claude prices come from Anthropic's published pricing page. Cache writes use the **1-hour** rate. If your cache is 5 minutes, change the write numbers (and `CLAUDE_TTL_MS`).
-- Claude Code's cache lifetime depends on how you sign in (reported as 1 hour on a Claude subscription, 5 minutes on an API key). Check yours.
-- The GPT-6 prices are from a third-party aggregator that reads the Azure Retail Prices API. Microsoft's own pricing page did not list them when this was written. Verify against your Azure pricing.
+- Built-in Claude prices come from Anthropic's published pricing page; cache writes assume the 1-hour rate unless you change the setting.
+- The built-in GPT-6 prices are from a third-party aggregator that reads the Azure Retail Prices API. Microsoft's own pricing page did not list them when this was written. Check them against your own Azure pricing, and override with *Custom prices* if they differ (Data Zone and Flex rates, for example, are different).
 - Long-context tiers are included for GPT-6 (above 272k tokens) and Claude Haiku 5.5 (above 100k).
-- A model that is not in the table is counted as $0 and the band says so.
 - Requests that fail (for example rate-limit errors) report no usage and count as $0.
+- The built-in table is in [`cost-bar/hooks/register.tsx`](cost-bar/hooks/register.tsx) if you'd rather edit it there.
 
 ## Limits
 

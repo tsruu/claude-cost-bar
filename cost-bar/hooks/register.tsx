@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { PluginOptions, Register } from 'claude-code'
 
 import type { Entry } from '../types'
 
-// USD per 1M tokens. EDIT HERE. `write` is the cache-write rate; Anthropic's is
-// 1.25x input for a 5m cache and 2x for 1h (set to the 1h figure below).
+// Built-in prices, USD per 1M tokens. Claude `write` figures are for the 1-hour cache; the
+// plugin setting `claudeCache` rescales them for a 5-minute cache. To change or add a price
+// without editing this file, use the `customPrices` setting.
 type Price = { input: number; output: number; read: number; write: number; long?: Omit<Price, 'long' | 'longAt'>; longAt?: number }
 
 // Azure bills the whole request at the long-context meter above this many input tokens.
@@ -30,20 +31,46 @@ const PRICES: Array<[string, Price]> = [
   ['gpt-6-luna', { input: 0.1, output: 0.5, read: 0.01, write: 0.125, long: { input: 0.2, output: 0.75, read: 0.02, write: 0.25 } }],
 ]
 
-const WINDOW_MS = 10 * 60 * 1000
+// Settings from the plugin's userConfig (the /plugin config menu). Every field has a default.
+const settings = (o: PluginOptions) => {
+  let custom: Array<[string, Price]> = []
+  let isCustomBad = false
+  try {
+    const parsed = JSON.parse(String(o.customPrices || '{}'))
+    custom = Object.entries(parsed).map(([id, v]) => [id.toLowerCase(), v as Price])
+  } catch {
+    isCustomBad = true
+  }
 
-// How long an idle prompt cache lives. Claude Code uses 1h on a Claude subscription and 5m on
-// an API key unless ENABLE_PROMPT_CACHING_1H is set. Azure's newer models default to 24h
-// retention but may evict sooner under load, so that figure is optimistic. EDIT HERE.
-const CLAUDE_TTL_MS = 60 * 60 * 1000
-const GPT_TTL_MS = 24 * 60 * 60 * 1000
-const ttlOf = (model: string) => (model.includes('gpt') ? GPT_TTL_MS : CLAUDE_TTL_MS)
+  return {
+    is5m: o.claudeCache === '5m',
+    claudeTtl: (o.claudeCache === '5m' ? 5 : 60) * 60e3,
+    gptTtl: Math.max(0.1, Number(o.gptCacheHours) || 24) * 3600e3,
+    windowMs: Math.max(1, Number(o.windowMinutes) || 10) * 60e3,
+    custom,
+    isCustomBad,
+  }
+}
+type Settings = ReturnType<typeof settings>
+
+const ttlOf = (model: string, cfg: Settings) => (model.includes('gpt') ? cfg.gptTtl : cfg.claudeTtl)
 
 const ledger = atom({ plugin: 'cost-bar', key: 'ledger' } as const, [])
 const isShown = atom({ plugin: 'cost-bar', key: 'isShown' } as const, false)
 
-const priceOf = (model: string): Price | undefined =>
-  PRICES.find(([id]) => model.includes(id))?.[1]
+// Custom prices win, then the built-in table. A Claude model on a 5-minute cache writes at
+// 1.25x input instead of 2x, so its write rates scale by 0.625.
+const priceOf = (model: string, cfg: Settings): Price | undefined => {
+  const id = model.toLowerCase()
+  const hit = cfg.custom.find(([k]) => id.includes(k))?.[1] ?? PRICES.find(([k]) => id.includes(k))?.[1]
+  if (!hit || !cfg.is5m || id.includes('gpt') || cfg.custom.some(([k]) => id.includes(k))) return hit
+
+  return {
+    ...hit,
+    write: hit.write * 0.625,
+    long: hit.long && { ...hit.long, write: hit.long.write * 0.625 },
+  }
+}
 
 const usd = (n: number) => (n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`)
 const short = (model: string) => model.replace(/^.*\//, '')
@@ -52,7 +79,9 @@ const key = (model: string) => model.toLowerCase().replace(/\[[^\]]*\]$/, '').re
 const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`)
 const mins = (ms: number) => (ms >= 3600e3 ? `${Math.floor(ms / 3600e3)}h ${Math.round((ms % 3600e3) / 60e3)}m` : `${Math.max(1, Math.round(ms / 60e3))}m`)
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const cfg = settings(options)
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'spend',
@@ -72,7 +101,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const u = e.usage
     if (u) {
-      const base = priceOf(u.model)
+      const base = priceOf(u.model, cfg)
       // The turn's usage is summed over its requests; the context size now is the best
       // stand-in for the biggest request's input.
       const context = (await $.session.usage()).context.tokens ?? 0
@@ -108,7 +137,7 @@ export const register: Register = on => {
     const list = await read($, ledger)
     const now = await $.clock.now()
     const total = list.reduce((s, x) => s + x.usd, 0)
-    const recent = list.filter(x => now - x.at <= WINDOW_MS).reduce((s, x) => s + x.usd, 0)
+    const recent = list.filter(x => now - x.at <= cfg.windowMs).reduce((s, x) => s + x.usd, 0)
     const input = list.reduce((s, x) => s + x.input, 0)
     const cached = list.reduce((s, x) => s + x.read, 0)
     const hit = input > 0 ? Math.round((cached / input) * 100) : 0
@@ -122,12 +151,12 @@ export const register: Register = on => {
     const ctxTokens = usage.context.tokens ?? 0
     const ctxWindow = usage.context.window
     const model = await $.session.model()
-    const base = priceOf(model)
+    const base = priceOf(model, cfg)
     const p = base && base.long && ctxTokens > (base.longAt ?? LONG_CONTEXT) ? base.long : base
     const mine = list.filter(x => key(x.model) === key(model))
     const last = mine.length > 0 ? mine[mine.length - 1] : undefined
     const idle = last ? now - last.at : Infinity
-    const ttl = ttlOf(model)
+    const ttl = ttlOf(model, cfg)
     const isWarm = idle < ttl
     const recentTurns = mine.slice(-8)
     const avgOut = recentTurns.length ? recentTurns.reduce((s, x) => s + (x.out ?? 0), 0) / recentTurns.length : 0
@@ -215,7 +244,7 @@ export const register: Register = on => {
             <Text color="#5fd7a0" bold>{usd(total)}</Text>
             <Text dimColor> session   </Text>
             <Text color="#e5c07b" bold>{usd(recent)}</Text>
-            <Text dimColor> last 10m   </Text>
+            <Text dimColor> last {Math.round(cfg.windowMs / 60e3)}m   </Text>
             <Text color={hitColor} bold>{hit}%</Text>
             <Text dimColor> cache hit</Text>
           </Box>
@@ -276,6 +305,9 @@ export const register: Register = on => {
               </Box>
             )}
           </Box>
+        )}
+        {cfg.isCustomBad && (
+          <Text color="#e06c75">cost-bar: the customPrices setting is not valid JSON, so it was ignored</Text>
         )}
         {unpriced.length > 0 && (
           <Text color="#e5c07b">no price for {unpriced.join(', ')} (counted as $0)</Text>
